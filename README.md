@@ -1,5 +1,14 @@
-# `wasp_as1_project`
-Template code for the WASP Autonomous Systems 1 project using Crazyflies
+# WASP Autonomous Systems 1 - Project - KTH Group C
+Code for the WASP Autonomous Systems 1 project using Crazyflies.
+
+## Group Members (alphabetic order)
+
+- Lissy Pellaco
+- Long Zhang
+- Mina Ferizbegovic
+- Nicolas Yves Maurice Harrand
+- Péter Várnai
+- Xuechun Xu
 
 In what is described below it is assumed that you have clone this repository and entered the directory.
 
