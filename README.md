@@ -51,3 +51,8 @@ sudo udevadm control --reload-rules
 sudo service udev restart
 ```
 Unplug the radio and plug it in again and it should be recognized
+
+## Other Files
+These csv files begin with `flightlog` record the UAV information during the main task.
+
+`WASP - AS1 Module2 Project - KTH Group C.MOV` is the video for showing how the UAV completed the task.
