@@ -12,7 +12,7 @@ from cflib import crazyflie, crtp
 from cflib.crazyflie.log import LogConfig
 
 # Set a channel - if set to None, the first available crazyflie is used
-#URI = 'radio://0/101/2M'
+#URI = 'radio://0/95/2M'
 URI = None
 
 def read_input(file=sys.stdin):
@@ -33,9 +33,9 @@ def read_input(file=sys.stdin):
 
 class ControllerThread(threading.Thread):
     period_in_ms = 20  # Control period. [ms]
-    thrust_step = 5e3   # Thrust step with W/S. [65535 = 100% PWM duty cycle]
+    thrust_step = 5e2   # Thrust step with W/S. [65535 = 100% PWM duty cycle]
     thrust_initial = 0
-    thrust_limit = (0, 65535)
+    thrust_limit = (8465, 65535)
     roll_limit   = (-30.0, 30.0)
     pitch_limit  = (-30.0, 30.0)
     yaw_limit    = (-200.0, 200.0)
@@ -43,6 +43,7 @@ class ControllerThread(threading.Thread):
 
     def __init__(self, cf):
         super(ControllerThread, self).__init__()
+        #file.open("/media/cf_Shared/logg.txt","w")
         self.cf = cf
 
         # Reset state
@@ -64,6 +65,8 @@ class ControllerThread(threading.Thread):
         self.attq = np.r_[0.0, 0.0, 0.0, 1.0]
         self.R = np.eye(3)
 
+        self.Iz = 0.0
+
         # Attitide (roll, pitch, yaw) from stabilizer
         self.stab_att = np.r_[0.0, 0.0, 0.0]
 
@@ -78,13 +81,13 @@ class ControllerThread(threading.Thread):
         log_stab_att.add_variable('stabilizer.pitch', 'float')
         log_stab_att.add_variable('stabilizer.yaw', 'float')
         self.cf.log.add_config(log_stab_att)
-    
+
         log_pos = LogConfig(name='Kalman Position', period_in_ms=self.period_in_ms)
         log_pos.add_variable('kalman.stateX', 'float')
         log_pos.add_variable('kalman.stateY', 'float')
         log_pos.add_variable('kalman.stateZ', 'float')
         self.cf.log.add_config(log_pos)
-        
+
         log_vel = LogConfig(name='Kalman Velocity', period_in_ms=self.period_in_ms)
         log_vel.add_variable('kalman.statePX', 'float')
         log_vel.add_variable('kalman.statePY', 'float')
@@ -98,7 +101,7 @@ class ControllerThread(threading.Thread):
         log_att.add_variable('kalman.q2', 'float')
         log_att.add_variable('kalman.q3', 'float')
         self.cf.log.add_config(log_att)
-        
+
         if log_stab_att.valid and log_pos.valid and log_vel.valid and log_att.valid:
             log_stab_att.data_received_cb.add_callback(self._log_data_stab_att)
             log_stab_att.error_cb.add_callback(self._log_error)
@@ -132,7 +135,7 @@ class ControllerThread(threading.Thread):
         self.stab_att = np.r_[data['stabilizer.roll'],
                               data['stabilizer.pitch'],
                               data['stabilizer.yaw']]
-    
+
     def _log_data_pos(self, timestamp, data, logconf):
         self.pos = np.r_[data['kalman.stateX'],
                          data['kalman.stateY'],
@@ -174,7 +177,7 @@ class ControllerThread(threading.Thread):
 
         # Set the current reference to the current positional estimate, at a
         # slight elevation
-        self.pos_ref = np.r_[self.pos[:2], 1.0]
+        self.pos_ref = np.r_[self.pos[:3]]
         self.yaw_ref = 0.0
         print('Initial positional reference:', self.pos_ref)
         print('Initial thrust reference:', self.thrust_r)
@@ -213,21 +216,38 @@ class ControllerThread(threading.Thread):
         # Compute control errors in position
         ex,  ey,  ez  = self.pos_ref - self.pos
 
+        Kp = 30.0;
+        Kd = 20.0;
+
+        if (self.enabled):
+            self.Iz = self.Iz + ez*0.02;
+
+        self.pitch_r = 1*(np.cos(yaw) * (Kp * ex - Kd*self.vel[0]) + np.sin(yaw)*(Kp * ey - Kd*self.vel[1])) ;
+        self.roll_r = 1*(np.sin(yaw) * (Kp * ex - Kd*self.vel[0]) - np.cos(yaw)*(Kp * ey - Kd*self.vel[1]) );
+        self.yawrate_r = -1*yaw;
+        self.thrust_r = 140000.0/(np.cos(pitch)*np.cos(roll))*(0.3*ez - 0.2*self.vel[2] + 0.03*self.Iz + 1.03*0.027*9.81);
+        # self.pitch_r = 0;
+        # self.roll_r = 0;
+        # self.yawrate_r = 0;
+
+        #self.thrust_r = 50000;
         # The code below will simply send the thrust that you can set using
         # the keyboard and put all other control signals to zero. It also
         # shows how, using numpy, you can threshold the signals to be between
         # the lower and upper limits defined by the arrays *_limit
-        self.roll_r    = np.clip(0.0, *self.roll_limit)
-        self.pitch_r   = np.clip(0.0, *self.pitch_limit)
-        self.yawrate_r = np.clip(0.0, *self.yaw_limit)
+        self.roll_r    = np.clip(self.roll_r, *self.roll_limit)
+        self.pitch_r   = np.clip(self.pitch_r, *self.pitch_limit)
+        self.yawrate_r = np.clip(self.yawrate_r, *self.yaw_limit)
         self.thrust_r  = np.clip(self.thrust_r, *self.thrust_limit)
-    
+
         message = ('ref: ({}, {}, {}, {})\n'.format(self.pos_ref[0], self.pos_ref[1], self.pos_ref[2], self.yaw_ref)+
                    'pos: ({}, {}, {}, {})\n'.format(self.pos[0], self.pos[1], self.pos[2], yaw)+
-                   'vel: ({}, {}, {})\n'.format(self.vel[1], self.vel[1], self.vel[2])+
+                   'vel: ({}, {}, {})\n'.format(self.vel[0], self.vel[1], self.vel[2])+
                    'error: ({}, {}, {})\n'.format(ex, ey, ez)+
-                   'control: ({}, {}, {}, {})\n'.format(self.roll_r, self.pitch_r, self.yawrate_r, self.thrust_r))
-        self.print_at_period(2.0, message)
+                   'control: ({}, {}, {}, {})\n'.format(self.roll_r, self.pitch_r, self.yawrate_r, self.thrust_r)+
+                   'angles: ({}, {})\n'.format(roll/3.1419*180, pitch/3.1419*180)+
+                   'integrator: ({})\n'.format(self.Iz))
+        self.print_at_period(1, message)
 
     def print_at_period(self, period, message):
         """ Prints the message at a given period """
@@ -281,7 +301,7 @@ class ControllerThread(threading.Thread):
 def handle_keyboard_input(control):
     pos_step = 0.1 # [m]
     yaw_step = 5   # [deg]
-    
+
     for ch in read_input():
         if ch == 'h':
             print('Key map:')
@@ -335,6 +355,14 @@ def handle_keyboard_input(control):
             print('Reference position changed to :', control.pos_ref)
         elif ch == 'e':
             control.enable()
+        elif ch == '1':
+            control.pos_ref = [1.2, 2.0, 1.4]
+        elif ch == '2':
+            control.pos_ref = [2.6, 3.7, 1.4]
+        elif ch == '3':
+            control.pos_ref = [2.6, 3.7, 0.2]
+        elif ch == '0':
+            control.pos_ref = [1.2, 2.0, 0.2]
         elif ch == 'q':
             if not control.enabled:
                 print('Uppercase Q quits the program')
